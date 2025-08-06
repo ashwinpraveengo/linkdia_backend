@@ -1,0 +1,1 @@
+# Authentication queries module
