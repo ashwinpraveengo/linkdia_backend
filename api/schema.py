@@ -10,10 +10,16 @@ from core.mutations.auth_mutations import (
     UpdateProfessionalProfileMutation,
     UpdateClientProfileMutation
 )
-from core.queries.auth_queries import Query
+from core.mutations.booking_mutations import BookingMutations
+from core.queries.auth_queries import Query as AuthQuery
+from core.queries.booking_queries import BookingQuery
 
 
-class Mutation(graphene.ObjectType):
+class Query(AuthQuery, BookingQuery, graphene.ObjectType):
+    pass
+
+
+class Mutation(BookingMutations, graphene.ObjectType):
     signup = SignUpMutation.Field()
     login = LoginMutation.Field()
     forgot_password = ForgotPasswordMutation.Field()
