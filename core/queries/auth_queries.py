@@ -1,7 +1,7 @@
 import graphene
 from graphene_django import DjangoObjectType
 from core.models import CustomUser, ProfessionalProfile, ClientProfile
-from core.mutations.auth_mutations import UserType, ProfessionalProfileType, ClientProfileType
+from core.types import UserType, ProfessionalProfileType, ClientProfileType
 
 
 class Query(graphene.ObjectType):

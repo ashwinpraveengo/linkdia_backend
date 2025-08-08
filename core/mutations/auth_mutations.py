@@ -1,36 +1,30 @@
 import graphene
 from graphene_django import DjangoObjectType
+from graphene_file_upload.scalars import Upload
 from django.contrib.auth import authenticate
 from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.core.files.storage import default_storage
 import requests
 import jwt
 from datetime import datetime, timedelta
+import os
+import uuid
 
 from core.models import CustomUser, PasswordResetToken, ProfessionalProfile, ClientProfile
-
-
-class UserType(DjangoObjectType):
-    full_name = graphene.String()
-    
-    class Meta:
-        model = CustomUser
-        fields = ('id', 'email', 'first_name', 'last_name', 'user_type', 'is_active', 
-                 'date_joined', 'profile_picture', 'phone_number', 'is_email_verified')
-
-    def resolve_full_name(self, info):
-        return self.full_name
-
-
-class AuthPayload(graphene.ObjectType):
-    success = graphene.Boolean()
-    message = graphene.String()
-    user = graphene.Field(UserType)
-    access_token = graphene.String()
-    refresh_token = graphene.String()
+from core.types import (
+    UserType,
+    ProfessionalProfileType,
+    ClientProfileType,
+    AuthPayloadType,
+    SuccessResponseType,
+    UserInputType,
+    ProfessionalProfileInputType,
+    ClientProfileInputType
+)
 
 
 class SignUpMutation(graphene.Mutation):
@@ -42,20 +36,20 @@ class SignUpMutation(graphene.Mutation):
         last_name = graphene.String()
         phone_number = graphene.String()
 
-    Output = AuthPayload
+    Output = AuthPayloadType
 
     def mutate(self, info, email, password, user_type, first_name=None, last_name=None, phone_number=None):
         try:
             # Validate user_type
             if user_type not in ['PROFESSIONAL', 'CLIENT']:
-                return AuthPayload(
+                return AuthPayloadType(
                     success=False,
                     message="user_type must be either 'PROFESSIONAL' or 'CLIENT'"
                 )
 
             # Check if user already exists
             if CustomUser.objects.filter(email=email).exists():
-                return AuthPayload(
+                return AuthPayloadType(
                     success=False,
                     message="User with this email already exists"
                 )
@@ -64,7 +58,7 @@ class SignUpMutation(graphene.Mutation):
             try:
                 validate_password(password)
             except ValidationError as e:
-                return AuthPayload(
+                return AuthPayloadType(
                     success=False,
                     message=str(e.messages[0])
                 )
@@ -91,7 +85,7 @@ class SignUpMutation(graphene.Mutation):
             access_token = str(refresh.access_token)
             refresh_token = str(refresh)
 
-            return AuthPayload(
+            return AuthPayloadType(
                 success=True,
                 message="User created successfully",
                 user=user,
@@ -100,7 +94,7 @@ class SignUpMutation(graphene.Mutation):
             )
 
         except Exception as e:
-            return AuthPayload(
+            return AuthPayloadType(
                 success=False,
                 message=f"An error occurred: {str(e)}"
             )
@@ -111,20 +105,20 @@ class LoginMutation(graphene.Mutation):
         email = graphene.String(required=True)
         password = graphene.String(required=True)
 
-    Output = AuthPayload
+    Output = AuthPayloadType
 
     def mutate(self, info, email, password):
         try:
             user = authenticate(email=email, password=password)
             
             if user is None:
-                return AuthPayload(
+                return AuthPayloadType(
                     success=False,
                     message="Invalid email or password"
                 )
 
             if not user.is_active:
-                return AuthPayload(
+                return AuthPayloadType(
                     success=False,
                     message="Account is deactivated"
                 )
@@ -135,7 +129,7 @@ class LoginMutation(graphene.Mutation):
             access_token = str(refresh.access_token)
             refresh_token = str(refresh)
 
-            return AuthPayload(
+            return AuthPayloadType(
                 success=True,
                 message="Login successful",
                 user=user,
@@ -144,7 +138,7 @@ class LoginMutation(graphene.Mutation):
             )
 
         except Exception as e:
-            return AuthPayload(
+            return AuthPayloadType(
                 success=False,
                 message=f"An error occurred: {str(e)}"
             )
@@ -250,7 +244,7 @@ class GoogleSignInMutation(graphene.Mutation):
     class Arguments:
         access_token = graphene.String(required=True)
 
-    Output = AuthPayload
+    Output = AuthPayloadType
 
     def mutate(self, info, access_token):
         try:
@@ -260,7 +254,7 @@ class GoogleSignInMutation(graphene.Mutation):
             )
             
             if google_response.status_code != 200:
-                return AuthPayload(
+                return AuthPayloadType(
                     success=False,
                     message="Invalid Google access token"
                 )
@@ -275,7 +269,7 @@ class GoogleSignInMutation(graphene.Mutation):
             profile_picture = google_data.get('picture', '')
 
             if not email:
-                return AuthPayload(
+                return AuthPayloadType(
                     success=False,
                     message="Email not provided by Google"
                 )
@@ -309,7 +303,7 @@ class GoogleSignInMutation(graphene.Mutation):
             access_token_jwt = str(refresh.access_token)
             refresh_token = str(refresh)
 
-            return AuthPayload(
+            return AuthPayloadType(
                 success=True,
                 message="Google sign-in successful",
                 user=user,
@@ -318,7 +312,7 @@ class GoogleSignInMutation(graphene.Mutation):
             )
 
         except Exception as e:
-            return AuthPayload(
+            return AuthPayloadType(
                 success=False,
                 message=f"An error occurred: {str(e)}"
             )
@@ -379,12 +373,13 @@ class UpdateProfileMutation(graphene.Mutation):
         first_name = graphene.String()
         last_name = graphene.String()
         phone_number = graphene.String()
+        profile_picture = Upload()
 
     success = graphene.Boolean()
     message = graphene.String()
     user = graphene.Field(UserType)
 
-    def mutate(self, info, first_name=None, last_name=None, phone_number=None):
+    def mutate(self, info, first_name=None, last_name=None, phone_number=None, profile_picture=None):
         user = info.context.user
         
         if not user.is_authenticated:
@@ -400,6 +395,34 @@ class UpdateProfileMutation(graphene.Mutation):
                 user.last_name = last_name
             if phone_number is not None:
                 user.phone_number = phone_number
+            
+            # Handle profile picture upload
+            if profile_picture is not None:
+                # Validate file type
+                allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+                if hasattr(profile_picture, 'content_type') and profile_picture.content_type not in allowed_types:
+                    return UpdateProfileMutation(
+                        success=False,
+                        message="Invalid file type. Only JPEG, PNG and WebP images are allowed."
+                    )
+
+                # Validate file size (max 5MB)
+                if hasattr(profile_picture, 'size') and profile_picture.size > 5 * 1024 * 1024:
+                    return UpdateProfileMutation(
+                        success=False,
+                        message="File too large. Maximum size is 5MB."
+                    )
+
+                # Delete old profile picture if exists
+                if user.profile_picture:
+                    try:
+                        if default_storage.exists(user.profile_picture.name):
+                            default_storage.delete(user.profile_picture.name)
+                    except Exception:
+                        pass  # Continue even if deletion fails
+
+                # Save new profile picture
+                user.profile_picture = profile_picture
 
             user.save()
 
@@ -416,16 +439,106 @@ class UpdateProfileMutation(graphene.Mutation):
             )
 
 
-class ProfessionalProfileType(DjangoObjectType):
-    class Meta:
-        model = ProfessionalProfile
-        fields = '__all__'
+class UpdateProfilePictureMutation(graphene.Mutation):
+    class Arguments:
+        profile_picture = Upload(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    user = graphene.Field(UserType)
+    errors = graphene.List(graphene.String)
+
+    def mutate(self, info, profile_picture):
+        user = info.context.user
+        
+        if not user.is_authenticated:
+            return UpdateProfilePictureMutation(
+                success=False,
+                message="Authentication required",
+                errors=["User not authenticated"]
+            )
+
+        try:
+            # Validate file type
+            allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+            if hasattr(profile_picture, 'content_type') and profile_picture.content_type not in allowed_types:
+                return UpdateProfilePictureMutation(
+                    success=False,
+                    message="Invalid file type. Only JPEG, PNG and WebP images are allowed.",
+                    errors=["Invalid file type"]
+                )
+
+            # Validate file size (max 5MB)
+            if hasattr(profile_picture, 'size') and profile_picture.size > 5 * 1024 * 1024:
+                return UpdateProfilePictureMutation(
+                    success=False,
+                    message="File too large. Maximum size is 5MB.",
+                    errors=["File too large"]
+                )
+
+            # Delete old profile picture if exists
+            if user.profile_picture:
+                try:
+                    if default_storage.exists(user.profile_picture.name):
+                        default_storage.delete(user.profile_picture.name)
+                except Exception:
+                    pass  # Continue even if deletion fails
+
+            # Save new profile picture
+            user.profile_picture = profile_picture
+            user.save()
+
+            return UpdateProfilePictureMutation(
+                success=True,
+                message="Profile picture updated successfully",
+                user=user
+            )
+
+        except Exception as e:
+            return UpdateProfilePictureMutation(
+                success=False,
+                message=f"An error occurred: {str(e)}",
+                errors=[str(e)]
+            )
 
 
-class ClientProfileType(DjangoObjectType):
-    class Meta:
-        model = ClientProfile
-        fields = '__all__'
+class RemoveProfilePictureMutation(graphene.Mutation):
+    success = graphene.Boolean()
+    message = graphene.String()
+    user = graphene.Field(UserType)
+
+    def mutate(self, info):
+        user = info.context.user
+        
+        if not user.is_authenticated:
+            return RemoveProfilePictureMutation(
+                success=False,
+                message="Authentication required"
+            )
+
+        try:
+            # Delete old profile picture if exists
+            if user.profile_picture:
+                try:
+                    if default_storage.exists(user.profile_picture.name):
+                        default_storage.delete(user.profile_picture.name)
+                except Exception:
+                    pass  # Continue even if deletion fails
+                
+                user.profile_picture = None
+                user.save()
+
+            return RemoveProfilePictureMutation(
+                success=True,
+                message="Profile picture removed successfully",
+                user=user
+            )
+
+        except Exception as e:
+            return RemoveProfilePictureMutation(
+                success=False,
+                message=f"An error occurred: {str(e)}"
+            )
 
 
 class UpdateProfessionalProfileMutation(graphene.Mutation):

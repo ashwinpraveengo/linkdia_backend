@@ -18,7 +18,22 @@ from django.contrib import admin
 from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt
 from graphene_django.views import GraphQLView
+from graphene_file_upload.django import FileUploadGraphQLView
 from django.http import JsonResponse
+from django.conf import settings
+from django.conf.urls.static import static
+from core.middleware import get_graphql_context
+
+class CustomFileUploadGraphQLView(FileUploadGraphQLView):
+    """
+    Custom GraphQL view that handles file uploads and authentication context
+    """
+    
+    def get_context(self, request):
+        """
+        Return the GraphQL context with authenticated user
+        """
+        return get_graphql_context(request)
 
 def home_view(request):
     """Simple home view for the API root"""
@@ -34,6 +49,14 @@ def home_view(request):
 urlpatterns = [
     path('', home_view, name='home'),
     path('admin/', admin.site.urls),
-    path('graphql/', csrf_exempt(GraphQLView.as_view(graphiql=True))),
+    path('graphql/', csrf_exempt(
+        CustomFileUploadGraphQLView.as_view(
+            graphiql=True
+        )
+    )),
     path('accounts/', include('allauth.urls')),
 ]
+
+# Serve media files during development
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

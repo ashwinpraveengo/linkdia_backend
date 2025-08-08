@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
     'graphene_django',
+    'graphene_file_upload',
     'core',
 ]
 
@@ -64,6 +65,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
+    'core.middleware.GraphQLAuthenticationMiddleware',  # Add GraphQL JWT auth
 ]
 
 ROOT_URLCONF = 'api.urls'
@@ -211,6 +213,14 @@ REST_FRAMEWORK = {
     ],
 }
 
+# GraphQL Configuration
+GRAPHENE = {
+    'SCHEMA': 'api.schema.schema',
+    'MIDDLEWARE': [
+        'graphql_jwt.middleware.JSONWebTokenMiddleware',
+    ],
+}
+
 # CORS Configuration for Flutter mobile app
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -250,6 +260,10 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@linkdia.com')
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# Media files configuration
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # GraphQL Configuration
 GRAPHENE = {
