@@ -9,11 +9,22 @@ from core.models import (
     PaymentMethod,
 )
 from core.types.file_types import FileInfoType
+from core.types.common import ExpertiseAreaEnum
 
 
 # Professional Profile Type
 class ProfessionalProfileType(DjangoObjectType):
     """GraphQL type for ProfessionalProfile model"""
+    area_of_expertise = graphene.String()
+    # Add camelCase alias for frontend compatibility
+    areaOfExpertise = graphene.String()
+    yearsOfExperience = graphene.String()
+    bioIntroduction = graphene.String()
+    onboardingStep = graphene.String()
+    onboardingCompleted = graphene.Boolean()
+    verificationStatus = graphene.String()
+    createdAt = graphene.DateTime()
+    updatedAt = graphene.DateTime()
     
     class Meta:
         model = ProfessionalProfile
@@ -22,6 +33,47 @@ class ProfessionalProfileType(DjangoObjectType):
             'bio_introduction', 'location', 'verification_status',
             'onboarding_step', 'onboarding_completed', 'created_at', 'updated_at'
         )
+    
+    def resolve_area_of_expertise(self, info):
+        """Return the area_of_expertise as display value"""
+        if not self.area_of_expertise:
+            return None
+        
+        # Convert enum value to display value
+        display_mapping = dict(ProfessionalProfile.EXPERTISE_AREA_CHOICES)
+        return display_mapping.get(self.area_of_expertise, self.area_of_expertise)
+    
+    def resolve_areaOfExpertise(self, info):
+        """Return the area_of_expertise as camelCase for frontend compatibility"""
+        return self.resolve_area_of_expertise(info)
+    
+    def resolve_yearsOfExperience(self, info):
+        """Return years_of_experience as camelCase"""
+        return self.years_of_experience
+    
+    def resolve_bioIntroduction(self, info):
+        """Return bio_introduction as camelCase"""
+        return self.bio_introduction
+    
+    def resolve_onboardingStep(self, info):
+        """Return onboarding_step as camelCase"""
+        return self.onboarding_step
+    
+    def resolve_onboardingCompleted(self, info):
+        """Return onboarding_completed as camelCase"""
+        return self.onboarding_completed
+    
+    def resolve_verificationStatus(self, info):
+        """Return verification_status as camelCase"""
+        return self.verification_status
+    
+    def resolve_createdAt(self, info):
+        """Return created_at as camelCase"""
+        return self.created_at
+    
+    def resolve_updatedAt(self, info):
+        """Return updated_at as camelCase"""
+        return self.updated_at
 
 
 # Step 2: Document Upload Types
@@ -45,13 +97,19 @@ class ProfessionalDocumentType(DjangoObjectType):
 # Step 3: Video KYC Types  
 class VideoKYCType(DjangoObjectType):
     """GraphQL type for VideoKYC model"""
+    video = graphene.Field(FileInfoType)
     
     class Meta:
         model = VideoKYC
         fields = (
             'id', 'professional', 'status', 'completed_at', 
-            'verified_at', 'created_at'
+            'verified_at', 'created_at', 'session_data',
+            # Exclude binary field: 'video_data'
+            'video_name', 'video_content_type', 'video_size'
         )
+    
+    def resolve_video(self, info):
+        return FileInfoType.from_instance(self, 'video')
 
 
 # Step 4: Portfolio Types
@@ -107,8 +165,12 @@ class PaymentMethodType(DjangoObjectType):
 class ProfessionalProfileInputType(graphene.InputObjectType):
     """Input type for professional profile updates"""
     area_of_expertise = graphene.String()
+    # Add camelCase aliases for frontend compatibility
+    areaOfExpertise = graphene.String()
     years_of_experience = graphene.String()
+    yearsOfExperience = graphene.String()
     bio_introduction = graphene.String()
+    bioIntroduction = graphene.String()
     location = graphene.String()
 
 
@@ -146,6 +208,20 @@ class ConsultationAvailabilityInputType(graphene.InputObjectType):
 
 class PaymentMethodInputType(graphene.InputObjectType):
     """Input type for payment method creation"""
+    payment_type = graphene.String(required=True)
+    # Bank account fields
+    account_holder_name = graphene.String()
+    bank_name = graphene.String()
+    account_number = graphene.String()
+    ifsc_code = graphene.String()
+    # Digital wallet fields
+    wallet_provider = graphene.String()
+    wallet_phone_number = graphene.String()
+
+
+# Alias for frontend compatibility
+class PaymentDataInput(graphene.InputObjectType):
+    """Input type for payment data (alias for PaymentMethodInputType)"""
     payment_type = graphene.String(required=True)
     # Bank account fields
     account_holder_name = graphene.String()

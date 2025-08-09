@@ -251,6 +251,13 @@ class VideoKYC(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
     verified_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Video file storage fields
+    video_data = models.BinaryField(null=True, blank=True)
+    video_name = models.CharField(max_length=255, null=True, blank=True)
+    video_content_type = models.CharField(max_length=100, null=True, blank=True)
+    video_size = models.IntegerField(null=True, blank=True)
+    session_data = models.TextField(null=True, blank=True)  # Store session metadata as JSON
 
     class Meta:
         db_table = 'video_kyc_sessions'

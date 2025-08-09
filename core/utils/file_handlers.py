@@ -15,12 +15,14 @@ class FileValidator:
     ALLOWED_EXTENSIONS = {
         'image': ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'],
         'document': ['pdf', 'doc', 'docx', 'txt', 'rtf'],
-        'all': ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'pdf', 'doc', 'docx', 'txt', 'rtf']
+        'video': ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp'],
+        'all': ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'pdf', 'doc', 'docx', 'txt', 'rtf', 'mp4', 'mov', 'avi', 'mkv', 'webm', '3gp']
     }
     
     MAX_FILE_SIZES = {
         'image': 5 * 1024 * 1024,  # 5MB
         'document': 10 * 1024 * 1024,  # 10MB
+        'video': 50 * 1024 * 1024,  # 50MB for videos
         'profile_picture': 2 * 1024 * 1024,  # 2MB
     }
     

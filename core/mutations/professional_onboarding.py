@@ -29,12 +29,47 @@ from core.types.proffesional_profile import (
     PortfolioInputType,
     ConsultationAvailabilityInputType,
     PaymentMethodInputType,
+    PaymentDataInput,
 )
 from core.utils.permissions import professional_required
 from core.utils.file_handlers import process_uploaded_file
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+
+# Utility functions for step conversion
+def get_step_number_from_name(step_name):
+    """Convert step name to step number for frontend compatibility"""
+    step_mapping = {
+        'PROFILE_SETUP': 1,
+        'DOCUMENT_UPLOAD': 2,
+        'VIDEO_KYC': 3,
+        'PORTFOLIO': 4,
+        'CONSULTATION_HOURS': 5,
+        'PAYMENT_SETUP': 6,
+        'COMPLETED': 7
+    }
+    return step_mapping.get(step_name, 1)
+
+
+def get_step_name_from_number(step_number):
+    """Convert step number to step name for backend processing"""
+    step_mapping = {
+        1: 'PROFILE_SETUP',
+        2: 'DOCUMENT_UPLOAD',
+        3: 'VIDEO_KYC',
+        4: 'PORTFOLIO',
+        5: 'CONSULTATION_HOURS',
+        6: 'PAYMENT_SETUP',
+        7: 'COMPLETED'
+    }
+    return step_mapping.get(step_number, 'PROFILE_SETUP')
+
+
+def get_completed_step_numbers(step_names):
+    """Convert list of completed step names to numbers"""
+    return [get_step_number_from_name(name) for name in step_names]
 
 
 # Step 1: Profile Setup Mutations
@@ -51,6 +86,7 @@ class UpdateProfessionalProfile(Mutation):
     next_step = String()
     current_step = String()
     
+
     @professional_required
     def mutate(self, info, profile_data, profile_picture=None):
         try:
@@ -58,18 +94,36 @@ class UpdateProfessionalProfile(Mutation):
                 user = info.context.user
                 profile, created = ProfessionalProfile.objects.get_or_create(user=user)
                 
-                # Ensure we're on the correct step
-                if profile.onboarding_step not in ['PROFILE_SETUP']:
+                # Allow profile updates from PROFILE_SETUP or DOCUMENT_UPLOAD steps
+                # This allows users to go back and edit their profile
+                if profile.onboarding_step not in ['PROFILE_SETUP', 'DOCUMENT_UPLOAD']:
                     return UpdateProfessionalProfile(
                         success=False,
-                        message=f"Cannot update profile from {profile.onboarding_step} step. Please complete steps in order.",
+                        message=f"Cannot update profile from {profile.onboarding_step} step. Please complete current step first.",
                         current_step=profile.onboarding_step
                     )
                 
-                # Update profile fields
-                for field, value in profile_data.items():
-                    if hasattr(profile, field) and value is not None:
-                        setattr(profile, field, value)
+                # Update profile fields with validation
+                # Convert profile_data dict to proper field assignments
+                if profile_data.get('area_of_expertise'):
+                    # Validate area_of_expertise
+                    valid_choices = [choice[0] for choice in ProfessionalProfile.EXPERTISE_AREA_CHOICES]
+                    if profile_data['area_of_expertise'] not in valid_choices:
+                        return UpdateProfessionalProfile(
+                            success=False,
+                            message=f"Invalid area of expertise. Valid choices are: {', '.join(valid_choices)}",
+                            current_step=profile.onboarding_step
+                        )
+                    profile.area_of_expertise = profile_data['area_of_expertise']
+                
+                if profile_data.get('years_of_experience'):
+                    profile.years_of_experience = profile_data['years_of_experience']
+                
+                if profile_data.get('bio_introduction'):
+                    profile.bio_introduction = profile_data['bio_introduction']
+                
+                if profile_data.get('location'):
+                    profile.location = profile_data['location']
                 
                 # Handle profile picture upload
                 if profile_picture:
@@ -93,11 +147,19 @@ class UpdateProfessionalProfile(Mutation):
                 has_profile_picture = bool(user.profile_picture_data)
                 
                 if all(getattr(profile, field) for field in required_fields) and has_profile_picture:
-                    # Profile setup complete, move to next step
-                    profile.update_onboarding_step('DOCUMENT_UPLOAD')
-                    next_step = 'DOCUMENT_UPLOAD'
-                    message = "Profile setup completed successfully! Please proceed to document upload."
+                    # Profile setup complete, move to next step only if currently on PROFILE_SETUP
+                    if profile.onboarding_step == 'PROFILE_SETUP':
+                        profile.update_onboarding_step('DOCUMENT_UPLOAD')
+                        next_step = 'DOCUMENT_UPLOAD'
+                        message = "Profile setup completed successfully! Please proceed to document upload."
+                    else:
+                        # User is updating profile from later step
+                        next_step = profile.onboarding_step
+                        message = "Profile updated successfully!"
                 else:
+                    # Profile incomplete, set back to PROFILE_SETUP if needed
+                    if profile.onboarding_step != 'PROFILE_SETUP':
+                        profile.update_onboarding_step('PROFILE_SETUP')
                     next_step = 'PROFILE_SETUP'
                     missing_items = []
                     for field in required_fields:
@@ -132,6 +194,8 @@ class UpdateProfessionalProfile(Mutation):
                 message="An unexpected error occurred. Please try again.",
                 current_step=profile.onboarding_step if 'profile' in locals() else 'PROFILE_SETUP'
             )
+
+    # ...existing code...
 
 
 # Step 2: Document Upload Mutations  
@@ -325,6 +389,121 @@ class VerifyProfessionalDocument(Mutation):
 
 
 # Step 3: Video KYC Mutations
+class UploadVideoKYC(Mutation):
+    """Step 3: Upload video KYC file"""
+    
+    class Arguments:
+        video_file = Upload(required=True)
+        session_data = String()  # Optional session metadata
+    
+    video_kyc = Field(VideoKYCType)
+    success = Boolean()
+    message = String()
+    next_step = String()
+    current_step = String()
+    profile_updated = Boolean()
+    
+    @professional_required
+    def mutate(self, info, video_file, session_data=None):
+        try:
+            with transaction.atomic():
+                user = info.context.user
+                
+                # Ensure user has professional profile
+                if not hasattr(user, 'professional_profile'):
+                    return UploadVideoKYC(
+                        success=False,
+                        message="Professional profile not found.",
+                        current_step='PROFILE_SETUP',
+                        profile_updated=False
+                    )
+                
+                profile = user.professional_profile
+                
+                # Check if we're on the right step
+                if profile.onboarding_step != 'VIDEO_KYC':
+                    return UploadVideoKYC(
+                        success=False,
+                        message=f"Cannot upload video KYC from {profile.onboarding_step} step. Please complete document verification first.",
+                        current_step=profile.onboarding_step,
+                        profile_updated=False
+                    )
+                
+                # Verify that documents are verified (additional check)
+                verified_docs = ProfessionalDocument.objects.filter(
+                    professional=profile,
+                    verification_status='VERIFIED'
+                ).count()
+                
+                if verified_docs < 2:
+                    return UploadVideoKYC(
+                        success=False,
+                        message="Please wait for at least 2 documents to be verified before uploading video KYC.",
+                        current_step=profile.onboarding_step,
+                        profile_updated=False
+                    )
+                
+                # Process uploaded video file
+                try:
+                    file_data = process_uploaded_file(video_file, file_type='video', max_size_key='video')
+                except Exception as file_error:
+                    logger.error(f"Video KYC file processing failed: {file_error}")
+                    return UploadVideoKYC(
+                        success=False,
+                        message="Failed to process uploaded video file. Please check file format and try again.",
+                        current_step=profile.onboarding_step,
+                        profile_updated=False
+                    )
+                
+                # Create or update video KYC record with uploaded file
+                video_kyc, created = VideoKYC.objects.get_or_create(    
+                    professional=profile,
+                    defaults={
+                        'status': 'VERIFIED',  # Auto-verify immediately
+                        'completed_at': timezone.now(),
+                        'verified_at': timezone.now(),  # Set verification time
+                        'video_data': file_data['data'],
+                        'video_name': file_data['name'],
+                        'video_content_type': file_data['content_type'],
+                        'video_size': file_data['size'],
+                        'session_data': session_data
+                    }
+                )
+                
+                if not created:
+                    video_kyc.status = 'VERIFIED'  # Auto-verify
+                    video_kyc.completed_at = timezone.now()
+                    video_kyc.verified_at = timezone.now()
+                    video_kyc.video_data = file_data['data']
+                    video_kyc.video_name = file_data['name']
+                    video_kyc.video_content_type = file_data['content_type']
+                    video_kyc.video_size = file_data['size']
+                    if session_data:
+                        video_kyc.session_data = session_data
+                    video_kyc.save()
+                
+                # Automatically move to portfolio step since KYC is auto-verified
+                profile.update_onboarding_step('PORTFOLIO')
+                
+                return UploadVideoKYC(
+                    video_kyc=video_kyc,
+                    success=True,
+                    message="Video KYC uploaded and automatically verified! You can now proceed to portfolio setup.",
+                    next_step='PORTFOLIO',
+                    current_step=profile.onboarding_step,
+                    profile_updated=True
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in video KYC upload: {e}")
+            return UploadVideoKYC(
+                success=False,
+                message="An unexpected error occurred during video KYC upload.",
+                current_step=profile.onboarding_step if 'profile' in locals() else 'VIDEO_KYC',
+                profile_updated=False
+            )
+
+
 class CompleteVideoKYC(Mutation):
     """Step 3: Complete video KYC"""
     
@@ -375,24 +554,29 @@ class CompleteVideoKYC(Mutation):
                     )
                 
                 # Create or update video KYC record
-                video_kyc, created = VideoKYC.objects.get_or_create(
+                video_kyc, created = VideoKYC.objects.get_or_create(    
                     professional=profile,
                     defaults={
-                        'status': 'COMPLETED',
-                        'completed_at': timezone.now()
+                        'status': 'VERIFIED',  # Auto-verify immediately
+                        'completed_at': timezone.now(),
+                        'verified_at': timezone.now()  # Set verification time
                     }
                 )
                 
                 if not created:
-                    video_kyc.status = 'COMPLETED'
+                    video_kyc.status = 'VERIFIED'  # Auto-verify
                     video_kyc.completed_at = timezone.now()
+                    video_kyc.verified_at = timezone.now()
                     video_kyc.save()
+                
+                # Automatically move to portfolio step since KYC is auto-verified
+                profile.update_onboarding_step('PORTFOLIO')
                 
                 return CompleteVideoKYC(
                     video_kyc=video_kyc,
                     success=True,
-                    message="Video KYC completed successfully. Please wait for admin verification.",
-                    next_step='VIDEO_KYC',  # Stay on same step until verified
+                    message="Video KYC completed and automatically verified! You can now proceed to portfolio setup.",
+                    next_step='PORTFOLIO',
                     current_step=profile.onboarding_step
                 )
                 
@@ -406,11 +590,11 @@ class CompleteVideoKYC(Mutation):
 
 
 class VerifyVideoKYC(Mutation):
-    """Admin mutation to verify video KYC"""
+    """Automatic video KYC verification (temporarily automatic for development)"""
     
     class Arguments:
         kyc_id = ID(required=True)
-        status = String(required=True)  # VERIFIED, REJECTED
+        status = String(required=False, default_value="VERIFIED")  # Auto-verify by default
         admin_notes = String()  # Optional admin notes
     
     video_kyc = Field(VideoKYCType)
@@ -419,43 +603,36 @@ class VerifyVideoKYC(Mutation):
     profile_updated = Boolean()
     next_step = String()
     
-    def mutate(self, info, kyc_id, status, admin_notes=None):
+    def mutate(self, info, kyc_id, status="VERIFIED", admin_notes=None):
         try:
             with transaction.atomic():
-                # Check if user is admin/staff
-                if not info.context.user.is_staff:
-                    return VerifyVideoKYC(
-                        success=False,
-                        message="Only admin can verify KYC"
-                    )
+                # For now, make it automatic (remove admin check)
+                # TODO: Re-enable admin check when manual verification is needed
+                # if not info.context.user.is_staff:
+                #     return VerifyVideoKYC(
+                #         success=False,
+                #         message="Only admin can verify KYC"
+                #     )
                 
-                # Validate status
-                if status not in ['VERIFIED', 'REJECTED']:
-                    return VerifyVideoKYC(
-                        success=False,
-                        message="Invalid status. Use 'VERIFIED' or 'REJECTED'."
-                    )
+                # Auto-verify all KYC for development purposes
+                status = "VERIFIED"  # Force auto-verification
                 
                 video_kyc = VideoKYC.objects.get(id=kyc_id)
                 video_kyc.status = status
+                video_kyc.verified_at = timezone.now()
                 
+                # Move to portfolio step automatically
+                profile = video_kyc.professional
                 profile_updated = False
-                next_step = video_kyc.professional.onboarding_step
+                next_step = profile.onboarding_step
                 
-                if status == 'VERIFIED':
-                    video_kyc.verified_at = timezone.now()
-                    
-                    # Move to portfolio step
-                    profile = video_kyc.professional
-                    if profile.onboarding_step == 'VIDEO_KYC':
-                        profile.update_onboarding_step('PORTFOLIO')
-                        profile_updated = True
-                        next_step = 'PORTFOLIO'
-                        message = f"Video KYC verified successfully. Professional can now proceed to portfolio setup."
-                    else:
-                        message = f"Video KYC verified successfully."
+                if profile.onboarding_step == 'VIDEO_KYC':
+                    profile.update_onboarding_step('PORTFOLIO')
+                    profile_updated = True
+                    next_step = 'PORTFOLIO'
+                    message = "Video KYC automatically verified successfully. You can now proceed to portfolio setup."
                 else:
-                    message = f"Video KYC rejected. Professional needs to redo video KYC."
+                    message = "Video KYC automatically verified successfully."
                 
                 video_kyc.save()
                 
@@ -688,7 +865,7 @@ class AddPaymentMethod(Mutation):
     """Step 6: Add payment method"""
     
     class Arguments:
-        payment_data = PaymentMethodInputType(required=True)
+        payment_data = PaymentDataInput(required=True)  # Changed to PaymentDataInput for frontend compatibility
     
     payment_method = Field(PaymentMethodType)
     success = Boolean()
@@ -723,8 +900,30 @@ class AddPaymentMethod(Mutation):
                         onboarding_completed=False
                     )
                 
+                # Convert frontend field names to backend field names
+                converted_data = {}
+                field_mapping = {
+                    'paymentType': 'payment_type',
+                    'accountHolderName': 'account_holder_name',
+                    'bankName': 'bank_name',
+                    'accountNumber': 'account_number',
+                    'ifscCode': 'ifsc_code',
+                    'walletProvider': 'wallet_provider',
+                    'walletPhoneNumber': 'wallet_phone_number'
+                }
+                
+                # Map fields from frontend to backend format
+                for frontend_field, backend_field in field_mapping.items():
+                    if payment_data.get(frontend_field) is not None:
+                        converted_data[backend_field] = payment_data[frontend_field]
+                
+                # Also handle the original format (snake_case) for backward compatibility
+                for field in ['payment_type', 'account_holder_name', 'bank_name', 'account_number', 'ifsc_code', 'wallet_provider', 'wallet_phone_number']:
+                    if payment_data.get(field) is not None:
+                        converted_data[field] = payment_data[field]
+                
                 # Validate payment method data
-                payment_type = payment_data.get('payment_type')
+                payment_type = converted_data.get('payment_type')
                 
                 if not payment_type:
                     return AddPaymentMethod(
@@ -736,7 +935,7 @@ class AddPaymentMethod(Mutation):
                 
                 if payment_type == 'BANK_ACCOUNT':
                     required_fields = ['account_holder_name', 'bank_name', 'account_number', 'ifsc_code']
-                    missing_fields = [field for field in required_fields if not payment_data.get(field)]
+                    missing_fields = [field for field in required_fields if not converted_data.get(field)]
                     if missing_fields:
                         missing_readable = [field.replace('_', ' ').title() for field in missing_fields]
                         return AddPaymentMethod(
@@ -747,7 +946,7 @@ class AddPaymentMethod(Mutation):
                         )
                     
                     # Additional validation for bank details
-                    if len(payment_data.get('account_number', '')) < 8:
+                    if len(converted_data.get('account_number', '')) < 8:
                         return AddPaymentMethod(
                             success=False,
                             message="Account number must be at least 8 digits.",
@@ -755,7 +954,7 @@ class AddPaymentMethod(Mutation):
                             onboarding_completed=False
                         )
                     
-                    if len(payment_data.get('ifsc_code', '')) != 11:
+                    if len(converted_data.get('ifsc_code', '')) != 11:
                         return AddPaymentMethod(
                             success=False,
                             message="IFSC code must be exactly 11 characters.",
@@ -764,7 +963,7 @@ class AddPaymentMethod(Mutation):
                         )
                 
                 elif payment_type == 'DIGITAL_WALLET':
-                    if not payment_data.get('wallet_provider') or not payment_data.get('wallet_phone_number'):
+                    if not converted_data.get('wallet_provider') or not converted_data.get('wallet_phone_number'):
                         return AddPaymentMethod(
                             success=False,
                             message="Wallet provider and phone number are required for digital wallet.",
@@ -773,11 +972,20 @@ class AddPaymentMethod(Mutation):
                         )
                     
                     # Validate phone number format
-                    phone = payment_data.get('wallet_phone_number', '')
+                    phone = converted_data.get('wallet_phone_number', '')
+                    # Handle formatted phone numbers like +919567894970
+                    if phone.startswith('+91'):
+                        phone = phone[3:]  # Remove +91
+                        converted_data['wallet_phone_number'] = phone  # Update the converted data
+                    elif phone.startswith('+'):
+                        # Remove any other country code prefix for now
+                        phone = phone[1:]
+                        converted_data['wallet_phone_number'] = phone  # Update the converted data
+                    
                     if not phone.isdigit() or len(phone) != 10:
                         return AddPaymentMethod(
                             success=False,
-                            message="Phone number must be 10 digits.",
+                            message="Phone number must be 10 digits (without country code).",
                             current_step=profile.onboarding_step,
                             onboarding_completed=False
                         )
@@ -790,10 +998,10 @@ class AddPaymentMethod(Mutation):
                         onboarding_completed=False
                     )
                 
-                # Create payment method
+                # Create payment method with converted data
                 payment_method = PaymentMethod.objects.create(
                     professional=profile,
-                    **payment_data
+                    **converted_data
                 )
                 
                 # Complete onboarding
@@ -830,8 +1038,10 @@ class AddPaymentMethod(Mutation):
 class GetOnboardingStatus(graphene.ObjectType):
     """Get current onboarding status"""
     current_step = String()
+    current_step_number = Int()  # Added for frontend compatibility
     onboarding_completed = Boolean()
     steps_completed = List(String)
+    steps_completed_numbers = List(Int)  # Added for frontend compatibility
     next_step_message = String()
     progress_percentage = Float()
     total_steps = Int()
@@ -907,17 +1117,14 @@ class CheckOnboardingStatus(Mutation):
                 elif rejected_docs > 0:
                     blocking_issues.append(f"{rejected_docs} document(s) rejected - please re-upload")
             
-            # Step 3: Video KYC
+            # Step 3: Video KYC (Auto-verified for now)
             video_kyc = VideoKYC.objects.filter(professional=profile).first()
             if video_kyc and video_kyc.status == 'VERIFIED':
                 steps_completed.append('VIDEO_KYC')
             elif profile.onboarding_step == 'VIDEO_KYC':
                 if not video_kyc:
                     blocking_issues.append("Video KYC session not completed")
-                elif video_kyc.status == 'COMPLETED':
-                    blocking_issues.append("Video KYC completed, waiting for admin verification")
-                elif video_kyc.status == 'REJECTED':
-                    blocking_issues.append("Video KYC rejected - please redo")
+                # Note: Removed manual verification checks since it's now automatic
             
             # Step 4: Portfolio
             portfolio = Portfolio.objects.filter(professional=profile).first()
@@ -949,7 +1156,7 @@ class CheckOnboardingStatus(Mutation):
             step_messages = {
                 'PROFILE_SETUP': 'Complete your profile with picture, expertise, experience, bio, and location',
                 'DOCUMENT_UPLOAD': 'Upload at least 2 documents for verification',
-                'VIDEO_KYC': 'Complete video KYC verification session',
+                'VIDEO_KYC': 'Complete video KYC verification session (automatically verified)',
                 'PORTFOLIO': 'Add your portfolio with a sample document',
                 'CONSULTATION_HOURS': 'Set your consultation availability hours',
                 'PAYMENT_SETUP': 'Add your payment method details',
@@ -958,10 +1165,16 @@ class CheckOnboardingStatus(Mutation):
             
             next_step_message = step_messages.get(profile.onboarding_step, '')
             
+            # Convert to numeric values for frontend compatibility
+            current_step_number = get_step_number_from_name(profile.onboarding_step)
+            steps_completed_numbers = get_completed_step_numbers(steps_completed)
+            
             status = GetOnboardingStatus(
                 current_step=profile.onboarding_step,
+                current_step_number=current_step_number,
                 onboarding_completed=profile.onboarding_completed,
                 steps_completed=steps_completed,
+                steps_completed_numbers=steps_completed_numbers,
                 next_step_message=next_step_message,
                 progress_percentage=progress_percentage,
                 total_steps=total_steps,
@@ -983,6 +1196,192 @@ class CheckOnboardingStatus(Mutation):
             )
 
 
+class MarkStepCompleted(Mutation):
+    """Mark a specific onboarding step as completed"""
+    
+    class Arguments:
+        step_number = Int(required=True)
+    
+    success = Boolean()
+    message = String()
+    current_step = Int()
+    current_step_name = String()
+    steps_completed = List(Int)
+    next_step = String()
+    
+    @professional_required
+    def mutate(self, info, step_number):
+        try:
+            with transaction.atomic():
+                user = info.context.user
+                
+                # Ensure user has professional profile
+                if not hasattr(user, 'professional_profile'):
+                    profile = ProfessionalProfile.objects.create(user=user)
+                else:
+                    profile = user.professional_profile
+                
+                # Convert step number to step name
+                step_name = get_step_name_from_number(step_number)
+                
+                # Validate step number
+                if step_number < 1 or step_number > 6:
+                    return MarkStepCompleted(
+                        success=False,
+                        message="Invalid step number. Must be between 1 and 6.",
+                        current_step=get_step_number_from_name(profile.onboarding_step),
+                        current_step_name=profile.onboarding_step
+                    )
+                
+                # Check if step can be completed based on current progress
+                current_step_number = get_step_number_from_name(profile.onboarding_step)
+                
+                # Allow completing current step or previous steps for editing
+                if step_number > current_step_number + 1:
+                    return MarkStepCompleted(
+                        success=False,
+                        message=f"Cannot complete step {step_number} yet. Please complete step {current_step_number} first.",
+                        current_step=current_step_number,
+                        current_step_name=profile.onboarding_step
+                    )
+                
+                # Check if the step requirements are actually met
+                step_requirements_met = False
+                error_message = ""
+                
+                if step_number == 1:  # Profile Setup
+                    required_fields = ['area_of_expertise', 'years_of_experience', 'bio_introduction', 'location']
+                    has_profile_picture = bool(user.profile_picture_data)
+                    missing_items = [field for field in required_fields if not getattr(profile, field)]
+                    
+                    if not missing_items and has_profile_picture:
+                        step_requirements_met = True
+                        if profile.onboarding_step == 'PROFILE_SETUP':
+                            profile.update_onboarding_step('DOCUMENT_UPLOAD')
+                    else:
+                        error_message = f"Profile setup not complete. Missing: {', '.join(missing_items + (['Profile Picture'] if not has_profile_picture else []))}"
+                
+                elif step_number == 2:  # Document Upload
+                    verified_docs = ProfessionalDocument.objects.filter(
+                        professional=profile,
+                        verification_status='VERIFIED'
+                    ).count()
+                    
+                    if verified_docs >= 2:
+                        step_requirements_met = True
+                        if profile.onboarding_step == 'DOCUMENT_UPLOAD':
+                            profile.update_onboarding_step('VIDEO_KYC')
+                    else:
+                        error_message = f"Need {2 - verified_docs} more verified documents to complete this step"
+                
+                elif step_number == 3:  # Video KYC (Auto-verified)
+                    video_kyc = VideoKYC.objects.filter(professional=profile).first()
+                    
+                    if video_kyc and video_kyc.status == 'VERIFIED':
+                        step_requirements_met = True
+                        if profile.onboarding_step == 'VIDEO_KYC':
+                            profile.update_onboarding_step('PORTFOLIO')
+                    else:
+                        if not video_kyc:
+                            error_message = "Video KYC session not completed"
+                        else:
+                            error_message = "Video KYC not completed yet"
+                
+                elif step_number == 4:  # Portfolio
+                    portfolio = Portfolio.objects.filter(professional=profile).first()
+                    
+                    if portfolio:
+                        step_requirements_met = True
+                        if profile.onboarding_step == 'PORTFOLIO':
+                            profile.update_onboarding_step('CONSULTATION_HOURS')
+                    else:
+                        error_message = "Portfolio not created yet"
+                
+                elif step_number == 5:  # Consultation Hours
+                    availability = ConsultationAvailability.objects.filter(professional=profile).first()
+                    
+                    if availability:
+                        step_requirements_met = True
+                        if profile.onboarding_step == 'CONSULTATION_HOURS':
+                            profile.update_onboarding_step('PAYMENT_SETUP')
+                    else:
+                        error_message = "Consultation availability not set"
+                
+                elif step_number == 6:  # Payment Setup
+                    payment_method = PaymentMethod.objects.filter(professional=profile).first()
+                    
+                    if payment_method:
+                        step_requirements_met = True
+                        if profile.onboarding_step == 'PAYMENT_SETUP':
+                            profile.update_onboarding_step('COMPLETED')
+                    else:
+                        error_message = "Payment method not added"
+                
+                if not step_requirements_met:
+                    return MarkStepCompleted(
+                        success=False,
+                        message=error_message or f"Step {step_number} requirements not met",
+                        current_step=get_step_number_from_name(profile.onboarding_step),
+                        current_step_name=profile.onboarding_step
+                    )
+                
+                # Get updated completed steps
+                steps_completed = []
+                
+                # Check all steps again to get accurate completed list
+                # Step 1
+                required_fields = ['area_of_expertise', 'years_of_experience', 'bio_introduction', 'location']
+                has_profile_picture = bool(user.profile_picture_data)
+                if all(getattr(profile, field) for field in required_fields) and has_profile_picture:
+                    steps_completed.append(1)
+                
+                # Step 2
+                verified_docs = ProfessionalDocument.objects.filter(
+                    professional=profile,
+                    verification_status='VERIFIED'
+                ).count()
+                if verified_docs >= 2:
+                    steps_completed.append(2)
+                
+                # Step 3
+                video_kyc = VideoKYC.objects.filter(professional=profile).first()
+                if video_kyc and video_kyc.status == 'VERIFIED':
+                    steps_completed.append(3)
+                
+                # Step 4
+                portfolio = Portfolio.objects.filter(professional=profile).first()
+                if portfolio:
+                    steps_completed.append(4)
+                
+                # Step 5
+                availability = ConsultationAvailability.objects.filter(professional=profile).first()
+                if availability:
+                    steps_completed.append(5)
+                
+                # Step 6
+                payment_method = PaymentMethod.objects.filter(professional=profile).first()
+                if payment_method:
+                    steps_completed.append(6)
+                
+                current_step_number = get_step_number_from_name(profile.onboarding_step)
+                
+                return MarkStepCompleted(
+                    success=True,
+                    message=f"Step {step_number} marked as completed successfully",
+                    current_step=current_step_number,
+                    current_step_name=profile.onboarding_step,
+                    steps_completed=steps_completed,
+                    next_step=profile.onboarding_step
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in mark step completed: {e}")
+            return MarkStepCompleted(
+                success=False,
+                message="An unexpected error occurred while updating step status"
+            )
+
+
 # Mutation class that combines all mutations
 class ProfessionalOnboardingMutations(ObjectType):
     # Step 1: Profile Setup
@@ -993,6 +1392,7 @@ class ProfessionalOnboardingMutations(ObjectType):
     verify_professional_document = VerifyProfessionalDocument.Field()  # Admin only
     
     # Step 3: Video KYC
+    upload_video_kyc = UploadVideoKYC.Field()
     complete_video_kyc = CompleteVideoKYC.Field()
     verify_video_kyc = VerifyVideoKYC.Field()  # Admin only
     
@@ -1007,3 +1407,4 @@ class ProfessionalOnboardingMutations(ObjectType):
     
     # Utility
     check_onboarding_status = CheckOnboardingStatus.Field()
+    mark_step_completed = MarkStepCompleted.Field()

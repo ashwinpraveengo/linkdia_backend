@@ -17,7 +17,14 @@ from core.types.proffesional_profile import (
     ConsultationAvailabilityType,
     PaymentMethodType
 )
+from core.types.common import ExpertiseAreaEnum
 from core.utils.permissions import professional_required
+
+
+# Helper type for enum choices
+class EnumChoiceType(graphene.ObjectType):
+    value = graphene.String()
+    display = graphene.String()
 
 
 class ProfessionalQuery(ObjectType):
@@ -61,6 +68,10 @@ class ProfessionalQuery(ObjectType):
     # Step 6: Payment method queries
     my_payment_methods = List(PaymentMethodType)
     payment_methods = List(PaymentMethodType, professional_id=ID())
+    
+    # Enum choices queries
+    expertise_area_choices = List(EnumChoiceType)
+    document_type_choices = List(EnumChoiceType)
 
     # Profile resolvers
     def resolve_my_professional_profile(self, info):
@@ -120,15 +131,30 @@ class ProfessionalQuery(ObjectType):
 
     def resolve_professional_documents(self, info, professional_id=None, verification_status=None):
         """Get professional documents with filters"""
-        queryset = ProfessionalDocument.objects.all()
+        user = info.context.user
         
-        if professional_id:
-            queryset = queryset.filter(professional__id=professional_id)
+        # Only authenticated professionals can access documents
+        if not user.is_authenticated or not user.is_professional:
+            return []
         
-        if verification_status:
-            queryset = queryset.filter(verification_status=verification_status)
-        
-        return queryset
+        try:
+            # If no professional_id is provided, default to current user's profile
+            if professional_id:
+                # Only allow users to see their own documents unless they have admin privileges
+                if str(user.professional_profile.id) != professional_id and not user.is_staff:
+                    return []
+                queryset = ProfessionalDocument.objects.filter(professional__id=professional_id)
+            else:
+                # Default to current user's documents
+                profile = user.professional_profile
+                queryset = ProfessionalDocument.objects.filter(professional=profile)
+            
+            if verification_status:
+                queryset = queryset.filter(verification_status=verification_status)
+            
+            return queryset
+        except ProfessionalProfile.DoesNotExist:
+            return []
 
     # Video KYC resolvers
     def resolve_my_video_kyc(self, info):
@@ -215,3 +241,18 @@ class ProfessionalQuery(ObjectType):
     def resolve_payment_methods(self, info, professional_id):
         """Get payment methods by professional ID"""
         return PaymentMethod.objects.filter(professional__id=professional_id)
+
+    # Enum choices resolvers
+    def resolve_expertise_area_choices(self, info):
+        """Get expertise area choices"""
+        return [
+            EnumChoiceType(value=choice[0], display=choice[1])
+            for choice in ProfessionalProfile.EXPERTISE_AREA_CHOICES
+        ]
+
+    def resolve_document_type_choices(self, info):
+        """Get document type choices"""
+        return [
+            EnumChoiceType(value=choice[0], display=choice[1])
+            for choice in ProfessionalDocument.DOCUMENT_TYPE_CHOICES
+        ]
