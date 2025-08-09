@@ -95,7 +95,6 @@ class UpdateProfessionalProfile(Mutation):
                 profile, created = ProfessionalProfile.objects.get_or_create(user=user)
                 
                 # Allow profile updates from PROFILE_SETUP or DOCUMENT_UPLOAD steps
-                # This allows users to go back and edit their profile
                 if profile.onboarding_step not in ['PROFILE_SETUP', 'DOCUMENT_UPLOAD']:
                     return UpdateProfessionalProfile(
                         success=False,
@@ -103,25 +102,30 @@ class UpdateProfessionalProfile(Mutation):
                         current_step=profile.onboarding_step
                     )
                 
-                # Update profile fields with validation
-                # Convert profile_data dict to proper field assignments
-                if profile_data.get('area_of_expertise'):
+                # Update profile fields with validation - support both camelCase and snake_case
+                area_of_expertise = (profile_data.get('area_of_expertise') or 
+                                   profile_data.get('areaOfExpertise'))
+                if area_of_expertise:
                     # Validate area_of_expertise
                     valid_choices = [choice[0] for choice in ProfessionalProfile.EXPERTISE_AREA_CHOICES]
-                    if profile_data['area_of_expertise'] not in valid_choices:
+                    if area_of_expertise not in valid_choices:
                         return UpdateProfessionalProfile(
                             success=False,
                             message=f"Invalid area of expertise. Valid choices are: {', '.join(valid_choices)}",
                             current_step=profile.onboarding_step
                         )
-                    profile.area_of_expertise = profile_data['area_of_expertise']
+                    profile.area_of_expertise = area_of_expertise
                 
-                if profile_data.get('years_of_experience'):
-                    profile.years_of_experience = profile_data['years_of_experience']
+                years_of_experience = (profile_data.get('years_of_experience') or 
+                                     profile_data.get('yearsOfExperience'))
+                if years_of_experience:
+                    profile.years_of_experience = years_of_experience
                 
-                if profile_data.get('bio_introduction'):
-                    profile.bio_introduction = profile_data['bio_introduction']
-                
+                bio_introduction = (profile_data.get('bio_introduction') or 
+                                  profile_data.get('bioIntroduction'))
+                if bio_introduction:
+                    profile.bio_introduction = bio_introduction
+            
                 if profile_data.get('location'):
                     profile.location = profile_data['location']
                 
