@@ -452,14 +452,10 @@ class ConsultationSlot(models.Model):
     end_time = models.DateTimeField()
     status = models.CharField(max_length=20, choices=SLOT_STATUS_CHOICES, default='AVAILABLE')
     
-    # If slot is booked
-    # booking = models.ForeignKey(ConsultationBooking, on_delete=models.CASCADE, null=True, blank=True, related_name='slots')
-    
-    # If slot is temporarily held
+
     held_until = models.DateTimeField(null=True, blank=True)
     held_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='held_slots')
     
-    # Custom rate for this specific slot (optional override)
     custom_rate = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -547,15 +543,12 @@ class ConsultationBooking(models.Model):
     client_problem_description = models.TextField(max_length=1000, blank=True)
     client_contact_preference = models.CharField(max_length=50, blank=True)
     
-    # Meeting Details (for online consultations)
     meeting_link = models.URLField(blank=True, null=True)
     meeting_id = models.CharField(max_length=100, blank=True, null=True)
     meeting_password = models.CharField(max_length=50, blank=True, null=True)
     
-    # Location Details (for offline consultations)
     consultation_address = models.TextField(max_length=500, blank=True)
     
-    # Booking Timestamps
     booked_at = models.DateTimeField(auto_now_add=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -629,7 +622,6 @@ class ProfessionalReview(models.Model):
     client = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews_given')
     professional = models.ForeignKey(ProfessionalProfile, on_delete=models.CASCADE, related_name='reviews_received')
     
-    # Simple Review - just rating and note
     rating = models.IntegerField(
         validators=[MinValueValidator(1), MaxValueValidator(5)],
         help_text="Rating from 1 to 5 stars"
@@ -643,7 +635,7 @@ class ProfessionalReview(models.Model):
     class Meta:
         db_table = 'professional_reviews'
         ordering = ['-created_at']
-        unique_together = ['client', 'professional']  # One review per client per professional
+        unique_together = ['client', 'professional']  
 
     def __str__(self):
         return f"Review: {self.client.full_name} -> {self.professional.user.full_name} ({self.rating}/5)"
@@ -654,11 +646,9 @@ class ProfessionalReviewSummary(models.Model):
     
     professional = models.OneToOneField(ProfessionalProfile, on_delete=models.CASCADE, related_name='review_summary')
     
-    # Basic Statistics
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
     total_reviews = models.IntegerField(default=0)
     
-    # Rating Distribution
     five_star_count = models.IntegerField(default=0)
     four_star_count = models.IntegerField(default=0)
     three_star_count = models.IntegerField(default=0)
@@ -698,7 +688,6 @@ class ProfessionalReviewSummary(models.Model):
             self.two_star_count = rating_dict.get(2, 0)
             self.one_star_count = rating_dict.get(1, 0)
         else:
-            # Reset to defaults if no reviews
             self.average_rating = 0.00
             self.five_star_count = 0
             self.four_star_count = 0
