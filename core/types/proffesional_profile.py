@@ -7,6 +7,8 @@ from core.models import (
     Portfolio,
     ConsultationAvailability,
     PaymentMethod,
+    ProfessionalPricing,
+    ProfessionalReviewSummary,
 )
 from core.types.file_types import FileInfoType
 from core.types.common import ExpertiseAreaEnum
@@ -16,7 +18,6 @@ from core.types.common import ExpertiseAreaEnum
 class ProfessionalProfileType(DjangoObjectType):
     """GraphQL type for ProfessionalProfile model"""
     area_of_expertise = graphene.String()
-    # Add camelCase alias for frontend compatibility
     areaOfExpertise = graphene.String()
     yearsOfExperience = graphene.String()
     bioIntroduction = graphene.String()
@@ -31,7 +32,8 @@ class ProfessionalProfileType(DjangoObjectType):
         fields = (
             'id', 'user', 'area_of_expertise', 'years_of_experience',
             'bio_introduction', 'location', 'verification_status',
-            'onboarding_step', 'onboarding_completed', 'created_at', 'updated_at'
+            'onboarding_step', 'onboarding_completed', 'created_at', 'updated_at',
+            'pricing', 'review_summary'
         )
     
     def resolve_area_of_expertise(self, info):
@@ -74,6 +76,105 @@ class ProfessionalProfileType(DjangoObjectType):
     def resolve_updatedAt(self, info):
         """Return updated_at as camelCase"""
         return self.updated_at
+
+
+class ProfessionalPricingType(DjangoObjectType):
+    """GraphQL type for ProfessionalPricing model"""
+    fee30Min = graphene.Float()
+    fee60Min = graphene.Float() 
+    fee90Min = graphene.Float()
+    fee120Min = graphene.Float()
+    acceptsOnline = graphene.Boolean()
+    acceptsOffline = graphene.Boolean()
+    offlineConsultationExtra = graphene.Float()
+    
+    class Meta:
+        model = ProfessionalPricing
+        fields = (
+            'id', 'professional', 'fee_30_min', 'fee_60_min', 'fee_90_min', 'fee_120_min',
+            'offline_consultation_extra', 'accepts_online', 'accepts_offline',
+            'created_at', 'updated_at'
+        )
+    
+    def resolve_fee30Min(self, info):
+        """Return fee_30_min as camelCase"""
+        return float(self.fee_30_min)
+    
+    def resolve_fee60Min(self, info):
+        """Return fee_60_min as camelCase"""
+        return float(self.fee_60_min)
+    
+    def resolve_fee90Min(self, info):
+        """Return fee_90_min as camelCase"""
+        return float(self.fee_90_min)
+    
+    def resolve_fee120Min(self, info):
+        """Return fee_120_min as camelCase"""
+        return float(self.fee_120_min)
+    
+    def resolve_acceptsOnline(self, info):
+        """Return accepts_online as camelCase"""
+        return self.accepts_online
+    
+    def resolve_acceptsOffline(self, info):
+        """Return accepts_offline as camelCase"""
+        return self.accepts_offline
+    
+    def resolve_offlineConsultationExtra(self, info):
+        """Return offline_consultation_extra as camelCase"""
+        return float(self.offline_consultation_extra)
+
+
+class ProfessionalReviewSummaryType(DjangoObjectType):
+    """GraphQL type for ProfessionalReviewSummary model"""
+    averageRating = graphene.Float()
+    totalReviews = graphene.Int()
+    fiveStarCount = graphene.Int()
+    fourStarCount = graphene.Int()
+    threeStarCount = graphene.Int()
+    twoStarCount = graphene.Int()
+    oneStarCount = graphene.Int()
+    lastUpdated = graphene.DateTime()
+    
+    class Meta:
+        model = ProfessionalReviewSummary
+        fields = (
+            'id', 'professional', 'average_rating', 'total_reviews',
+            'five_star_count', 'four_star_count', 'three_star_count',
+            'two_star_count', 'one_star_count', 'last_updated'
+        )
+    
+    def resolve_averageRating(self, info):
+        """Return average_rating as camelCase"""
+        return float(self.average_rating)
+    
+    def resolve_totalReviews(self, info):
+        """Return total_reviews as camelCase"""
+        return self.total_reviews
+    
+    def resolve_fiveStarCount(self, info):
+        """Return five_star_count as camelCase"""
+        return self.five_star_count
+    
+    def resolve_fourStarCount(self, info):
+        """Return four_star_count as camelCase"""
+        return self.four_star_count
+    
+    def resolve_threeStarCount(self, info):
+        """Return three_star_count as camelCase"""
+        return self.three_star_count
+    
+    def resolve_twoStarCount(self, info):
+        """Return two_star_count as camelCase"""
+        return self.two_star_count
+    
+    def resolve_oneStarCount(self, info):
+        """Return one_star_count as camelCase"""
+        return self.one_star_count
+    
+    def resolve_lastUpdated(self, info):
+        """Return last_updated as camelCase"""
+        return self.last_updated
 
 
 # Step 2: Document Upload Types

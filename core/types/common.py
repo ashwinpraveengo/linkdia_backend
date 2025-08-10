@@ -231,6 +231,14 @@ class PageInfoType(graphene.ObjectType):
     total_count = graphene.Int()
 
 
+class PaginatedResult(graphene.ObjectType):
+    """Base class for paginated results"""
+    total = graphene.Int()
+    page = graphene.Int()
+    page_size = graphene.Int()
+    total_pages = graphene.Int()
+
+
 class PaginationInputType(graphene.InputObjectType):
     """Input type for pagination"""
     first = graphene.Int()

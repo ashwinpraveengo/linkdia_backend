@@ -516,4 +516,197 @@ class ConsultationSlot(models.Model):
             self.save()
 
 
+class ConsultationBooking(models.Model):
+    """Booking system for consultations"""
+    
+    BOOKING_STATUS_CHOICES = [
+        ('PENDING', 'Pending'),
+        ('CONFIRMED', 'Confirmed'),
+        ('COMPLETED', 'Completed'),
+        ('CANCELLED_BY_CLIENT', 'Cancelled by Client'),
+        ('CANCELLED_BY_PROFESSIONAL', 'Cancelled by Professional'),
+        ('NO_SHOW', 'No Show'),
+    ]
+    
+    CONSULTATION_TYPE_CHOICES = [
+        ('ONLINE', 'Online'),
+        ('OFFLINE', 'Offline'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='bookings')
+    professional = models.ForeignKey(ProfessionalProfile, on_delete=models.CASCADE, related_name='bookings')
+    consultation_slot = models.ForeignKey(ConsultationSlot, on_delete=models.CASCADE, related_name='bookings')
+    
+    # Booking Details
+    consultation_type = models.CharField(max_length=10, choices=CONSULTATION_TYPE_CHOICES)
+    consultation_fee = models.DecimalField(max_digits=10, decimal_places=2)
+    booking_status = models.CharField(max_length=30, choices=BOOKING_STATUS_CHOICES, default='PENDING')
+    
+    # Client Information
+    client_problem_description = models.TextField(max_length=1000, blank=True)
+    client_contact_preference = models.CharField(max_length=50, blank=True)
+    
+    # Meeting Details (for online consultations)
+    meeting_link = models.URLField(blank=True, null=True)
+    meeting_id = models.CharField(max_length=100, blank=True, null=True)
+    meeting_password = models.CharField(max_length=50, blank=True, null=True)
+    
+    # Location Details (for offline consultations)
+    consultation_address = models.TextField(max_length=500, blank=True)
+    
+    # Booking Timestamps
+    booked_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    
+    # Cancellation Details
+    cancellation_reason = models.TextField(max_length=500, blank=True)
+    cancelled_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='cancelled_bookings')
+    
+    # Payment Details
+    payment_status = models.CharField(max_length=20, default='PENDING')
+    payment_id = models.CharField(max_length=100, blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'consultation_bookings'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Booking: {self.client.full_name} -> {self.professional.user.full_name} ({self.booking_status})"
+    
+    def can_be_cancelled_by_client(self):
+        """Check if booking can be cancelled by client"""
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        if self.booking_status not in ['PENDING', 'CONFIRMED']:
+            return False
+        
+        # Allow cancellation up to 2 hours before the consultation
+        cancellation_deadline = self.consultation_slot.start_time - timedelta(hours=2)
+        return timezone.now() < cancellation_deadline
+    
+    def can_be_cancelled_by_professional(self):
+        """Check if booking can be cancelled by professional"""
+        return self.booking_status in ['PENDING', 'CONFIRMED']
+    
+    def cancel_booking(self, cancelled_by_user, reason=""):
+        """Cancel the booking"""
+        from django.utils import timezone
+        
+        if cancelled_by_user == self.client:
+            if not self.can_be_cancelled_by_client():
+                return False, "Booking cannot be cancelled at this time"
+            self.booking_status = 'CANCELLED_BY_CLIENT'
+        elif cancelled_by_user == self.professional.user:
+            if not self.can_be_cancelled_by_professional():
+                return False, "Booking cannot be cancelled at this time"
+            self.booking_status = 'CANCELLED_BY_PROFESSIONAL'
+        else:
+            return False, "User not authorized to cancel this booking"
+        
+        self.cancelled_by = cancelled_by_user
+        self.cancellation_reason = reason
+        self.cancelled_at = timezone.now()
+        
+        # Free up the consultation slot
+        self.consultation_slot.status = 'AVAILABLE'
+        self.consultation_slot.save()
+        
+        self.save()
+        return True, "Booking cancelled successfully"
+
+
+class ProfessionalReview(models.Model):
+    """Simple review system for professionals"""
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews_given')
+    professional = models.ForeignKey(ProfessionalProfile, on_delete=models.CASCADE, related_name='reviews_received')
+    
+    # Simple Review - just rating and note
+    rating = models.IntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        help_text="Rating from 1 to 5 stars"
+    )
+    review_note = models.TextField(max_length=500, blank=True, help_text="Optional review note")
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'professional_reviews'
+        ordering = ['-created_at']
+        unique_together = ['client', 'professional']  # One review per client per professional
+
+    def __str__(self):
+        return f"Review: {self.client.full_name} -> {self.professional.user.full_name} ({self.rating}/5)"
+
+
+class ProfessionalReviewSummary(models.Model):
+    """Simple aggregated review statistics for professionals"""
+    
+    professional = models.OneToOneField(ProfessionalProfile, on_delete=models.CASCADE, related_name='review_summary')
+    
+    # Basic Statistics
+    average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
+    total_reviews = models.IntegerField(default=0)
+    
+    # Rating Distribution
+    five_star_count = models.IntegerField(default=0)
+    four_star_count = models.IntegerField(default=0)
+    three_star_count = models.IntegerField(default=0)
+    two_star_count = models.IntegerField(default=0)
+    one_star_count = models.IntegerField(default=0)
+    
+    # Last Updated
+    last_updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'professional_review_summaries'
+
+    def __str__(self):
+        return f"Review Summary: {self.professional.user.full_name} ({self.average_rating}/5.0)"
+    
+    def update_summary(self):
+        """Update review summary statistics"""
+        from django.db.models import Avg, Count
+        
+        reviews = ProfessionalReview.objects.filter(professional=self.professional)
+        
+        # Basic statistics
+        self.total_reviews = reviews.count()
+        
+        if self.total_reviews > 0:
+            # Average rating
+            avg_rating = reviews.aggregate(avg_rating=Avg('rating'))['avg_rating']
+            self.average_rating = round(avg_rating or 0, 2)
+            
+            # Rating distribution
+            rating_counts = reviews.values('rating').annotate(count=Count('rating'))
+            rating_dict = {item['rating']: item['count'] for item in rating_counts}
+            
+            self.five_star_count = rating_dict.get(5, 0)
+            self.four_star_count = rating_dict.get(4, 0)
+            self.three_star_count = rating_dict.get(3, 0)
+            self.two_star_count = rating_dict.get(2, 0)
+            self.one_star_count = rating_dict.get(1, 0)
+        else:
+            # Reset to defaults if no reviews
+            self.average_rating = 0.00
+            self.five_star_count = 0
+            self.four_star_count = 0
+            self.three_star_count = 0
+            self.two_star_count = 0
+            self.one_star_count = 0
+        
+        self.save()
+
+
 

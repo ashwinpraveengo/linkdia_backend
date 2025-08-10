@@ -11,16 +11,18 @@ from core.mutations.auth_mutations import (
 )
 from core.mutations.professional_onboarding import ProfessionalOnboardingMutations
 from core.mutations.file_mutations import FileMutations
+from core.mutations.booking_mutations import BookingMutations
 from core.queries.auth_queries import Query as AuthQuery
 from core.queries.professional_queries import ProfessionalQuery
 from core.queries.file_queries import FileQuery
+from core.queries.booking_queries import BookingQueries
 
 
-class Query(AuthQuery, ProfessionalQuery, FileQuery, graphene.ObjectType):
+class Query(AuthQuery, ProfessionalQuery, FileQuery, BookingQueries, graphene.ObjectType):
     pass
 
 
-class Mutation(ProfessionalOnboardingMutations, FileMutations, graphene.ObjectType):
+class Mutation(ProfessionalOnboardingMutations, FileMutations, BookingMutations, graphene.ObjectType):
     # Auth mutations
     signup = SignUpMutation.Field()
     login = LoginMutation.Field()
@@ -39,6 +41,10 @@ class Mutation(ProfessionalOnboardingMutations, FileMutations, graphene.ObjectTy
     # Step 5: set_consultation_availability
     # Step 6: add_payment_method
     # Utility: check_onboarding_status
+    
+    # Booking System mutations:
+    # create_booking, cancel_booking, confirm_booking, complete_booking
+    # create_review, update_review
 
 
 schema = graphene.Schema(query=Query, mutation=Mutation)

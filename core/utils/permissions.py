@@ -18,6 +18,20 @@ professional_required = require_professional
 require_professional_user = require_professional
 
 
+def login_required(func):
+    """
+    Decorator to require user authentication for GraphQL resolvers
+    """
+    def wrapper(self, info, *args, **kwargs):
+        user = info.context.user
+        
+        if not user or isinstance(user, AnonymousUser) or not user.is_authenticated:
+            raise GraphQLError("Authentication required")
+        
+        return func(self, info, *args, **kwargs)
+    return wrapper
+
+
 def can_view_profile(user: CustomUser, target_profile: ProfessionalProfile) -> bool:
     """
     Check if user can view a professional's profile
