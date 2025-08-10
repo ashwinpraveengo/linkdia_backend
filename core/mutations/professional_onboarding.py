@@ -204,7 +204,7 @@ class UpdateProfessionalProfile(Mutation):
 
 # Step 2: Document Upload Mutations  
 class UploadProfessionalDocument(Mutation):
-    """Step 2: Upload professional document"""
+    """Step 2: Upload professional document with auto-verification"""
     
     class Arguments:
         document_type = String(required=True)
@@ -265,7 +265,7 @@ class UploadProfessionalDocument(Mutation):
                         current_step=profile.onboarding_step
                     )
                 
-                # Create or update document
+                # Create or update document with AUTO-VERIFICATION
                 document, created = ProfessionalDocument.objects.update_or_create(
                     professional=profile,
                     document_type=document_type,
@@ -274,18 +274,25 @@ class UploadProfessionalDocument(Mutation):
                         'document_name': file_data['name'],
                         'document_content_type': file_data['content_type'],
                         'document_size': file_data['size'],
-                        'verification_status': 'PENDING'
+                        'verification_status': 'VERIFIED',  # AUTO-VERIFY IMMEDIATELY
+                        'verified_at': timezone.now()  # Set verification timestamp
                     }
                 )
                 
-                # Check total documents
-                total_docs = ProfessionalDocument.objects.filter(professional=profile).count()
+                # Check total verified documents
+                total_verified_docs = ProfessionalDocument.objects.filter(
+                    professional=profile,
+                    verification_status='VERIFIED'
+                ).count()
                 
-                if total_docs >= 2:
-                    message = f"Document {'uploaded' if created else 'updated'} successfully. You have {total_docs} documents uploaded. Please wait for admin verification."
-                    next_step = 'DOCUMENT_UPLOAD'  # Stay on same step until verified
+                # Determine next step based on verified documents count
+                if total_verified_docs >= 2:
+                    # Automatically move to VIDEO_KYC step
+                    profile.update_onboarding_step('VIDEO_KYC')
+                    message = f"Document {'uploaded' if created else 'updated'} and automatically verified! You have {total_verified_docs} verified documents. Please proceed to Video KYC."
+                    next_step = 'VIDEO_KYC'
                 else:
-                    message = f"Document {'uploaded' if created else 'updated'} successfully. Please upload at least {2 - total_docs} more document(s)."
+                    message = f"Document {'uploaded' if created else 'updated'} and automatically verified! Please upload {2 - total_verified_docs} more document(s) to proceed."
                     next_step = 'DOCUMENT_UPLOAD'
                 
                 return UploadProfessionalDocument(
@@ -294,7 +301,7 @@ class UploadProfessionalDocument(Mutation):
                     message=message,
                     next_step=next_step,
                     current_step=profile.onboarding_step,
-                    documents_count=total_docs
+                    documents_count=total_verified_docs
                 )
                 
         except ValidationError as e:

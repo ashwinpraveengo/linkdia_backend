@@ -13,9 +13,13 @@ from core.types.file_types import FileInfoType
 class UserType(DjangoObjectType):
     """GraphQL type for CustomUser model"""
     full_name = graphene.String()
+    fullName = graphene.String()  # Add camelCase alias
+    firstName = graphene.String()  # Add camelCase alias for first_name
+    lastName = graphene.String()   # Add camelCase alias for last_name
     is_professional = graphene.Boolean()
     is_client = graphene.Boolean()
     profile_picture = graphene.Field(FileInfoType)
+    profilePictureData = graphene.String()    # Use only camelCase version
     
     class Meta:
         model = CustomUser
@@ -23,12 +27,21 @@ class UserType(DjangoObjectType):
             'id', 'email', 'first_name', 'last_name', 'user_type', 
             'is_active', 'date_joined', 'phone_number', 
             'is_email_verified', 'google_id', 'is_google_user',
-            # Exclude binary field: 'profile_picture_data'
+            # Don't include profile_picture_data in fields - handle via resolver only
             'profile_picture_name', 'profile_picture_content_type', 'profile_picture_size'
         )
 
     def resolve_full_name(self, info):
         return self.full_name
+    
+    def resolve_fullName(self, info):
+        return self.full_name
+    
+    def resolve_firstName(self, info):
+        return self.first_name
+    
+    def resolve_lastName(self, info):
+        return self.last_name
     
     def resolve_is_professional(self, info):
         return self.is_professional
@@ -38,6 +51,13 @@ class UserType(DjangoObjectType):
     
     def resolve_profile_picture(self, info):
         return FileInfoType.from_instance(self, 'profile_picture')
+    
+    def resolve_profilePictureData(self, info):
+        # Return base64 encoded image data if exists
+        if hasattr(self, 'profile_picture_data') and self.profile_picture_data:
+            import base64
+            return base64.b64encode(self.profile_picture_data).decode('utf-8')
+        return None
 
 
 class ClientProfileType(DjangoObjectType):
@@ -53,33 +73,6 @@ class ClientProfileType(DjangoObjectType):
     
     def resolve_user_full_name(self, info):
         return self.user.full_name
-
-
-class ProfessionalProfileType(DjangoObjectType):
-    """GraphQL type for ProfessionalProfile model"""
-    user_full_name = graphene.String()
-    completion_percentage = graphene.Float()
-    
-    class Meta:
-        model = ProfessionalProfile
-        fields = (
-            'id', 'user', 'area_of_expertise', 
-            'years_of_experience', 'bio_introduction', 'location',
-            'verification_status', 'onboarding_step', 'onboarding_completed',
-            'created_at', 'updated_at'
-        )
-    
-    def resolve_user_full_name(self, info):
-        return self.user.full_name
-    
-    def resolve_completion_percentage(self, info):
-        # Calculate completion percentage based on required fields
-        required_fields = ['area_of_expertise', 'years_of_experience', 'bio_introduction', 'location']
-        completed_fields = sum(1 for field in required_fields if getattr(self, field))
-        has_profile_picture = bool(self.user.profile_picture_data)
-        total_required = len(required_fields) + 1  # +1 for profile picture
-        completed_total = completed_fields + (1 if has_profile_picture else 0)
-        return (completed_total / total_required) * 100
 
 
 class PasswordResetTokenType(DjangoObjectType):

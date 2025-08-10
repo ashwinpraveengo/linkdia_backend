@@ -2,7 +2,6 @@
 from .user import (
     UserType,
     ClientProfileType,
-    ProfessionalProfileType,
     PasswordResetTokenType,
     UserInputType,
     ClientProfileInputType,
@@ -10,6 +9,9 @@ from .user import (
 )
 
 from .proffesional_profile import (
+    ProfessionalProfileType,  # Use the complete one from proffesional_profile.py
+    ProfessionalPricingType,
+    ProfessionalReviewSummaryType,
     ProfessionalDocumentType,
     VideoKYCType,
     PortfolioType,
@@ -91,7 +93,9 @@ __all__ = [
     # User Types
     'UserType',
     'ClientProfileType', 
-    'ProfessionalProfileType',
+    'ProfessionalProfileType',  # Now from proffesional_profile.py
+    'ProfessionalPricingType',
+    'ProfessionalReviewSummaryType',
     'PasswordResetTokenType',
     'UserInputType',
     'ClientProfileInputType',

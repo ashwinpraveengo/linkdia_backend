@@ -26,6 +26,8 @@ class ProfessionalProfileType(DjangoObjectType):
     verificationStatus = graphene.String()
     createdAt = graphene.DateTime()
     updatedAt = graphene.DateTime()
+    reviewSummary = graphene.Field(lambda: ProfessionalReviewSummaryType)
+    pricing = graphene.Field(lambda: ProfessionalPricingType)
     
     class Meta:
         model = ProfessionalProfile
@@ -33,7 +35,6 @@ class ProfessionalProfileType(DjangoObjectType):
             'id', 'user', 'area_of_expertise', 'years_of_experience',
             'bio_introduction', 'location', 'verification_status',
             'onboarding_step', 'onboarding_completed', 'created_at', 'updated_at',
-            'pricing', 'review_summary'
         )
     
     def resolve_area_of_expertise(self, info):
@@ -41,41 +42,60 @@ class ProfessionalProfileType(DjangoObjectType):
         if not self.area_of_expertise:
             return None
         
-        # Convert enum value to display value
+        from core.models import ProfessionalProfile
         display_mapping = dict(ProfessionalProfile.EXPERTISE_AREA_CHOICES)
         return display_mapping.get(self.area_of_expertise, self.area_of_expertise)
     
     def resolve_areaOfExpertise(self, info):
         """Return the area_of_expertise as camelCase for frontend compatibility"""
-        return self.resolve_area_of_expertise(info)
+        if not hasattr(self, 'area_of_expertise') or not self.area_of_expertise:
+            return None
+        
+        from core.models import ProfessionalProfile  
+        display_mapping = dict(ProfessionalProfile.EXPERTISE_AREA_CHOICES)
+        return display_mapping.get(self.area_of_expertise, self.area_of_expertise)
     
     def resolve_yearsOfExperience(self, info):
         """Return years_of_experience as camelCase"""
-        return self.years_of_experience
+        return getattr(self, 'years_of_experience', None)
     
     def resolve_bioIntroduction(self, info):
         """Return bio_introduction as camelCase"""
-        return self.bio_introduction
+        return getattr(self, 'bio_introduction', None)
     
     def resolve_onboardingStep(self, info):
         """Return onboarding_step as camelCase"""
-        return self.onboarding_step
+        return getattr(self, 'onboarding_step', None)
     
     def resolve_onboardingCompleted(self, info):
         """Return onboarding_completed as camelCase"""
-        return self.onboarding_completed
+        return getattr(self, 'onboarding_completed', None)
     
     def resolve_verificationStatus(self, info):
         """Return verification_status as camelCase"""
-        return self.verification_status
+        return getattr(self, 'verification_status', None)
     
     def resolve_createdAt(self, info):
         """Return created_at as camelCase"""
-        return self.created_at
+        return getattr(self, 'created_at', None)
     
     def resolve_updatedAt(self, info):
         """Return updated_at as camelCase"""
-        return self.updated_at
+        return getattr(self, 'updated_at', None)
+    
+    def resolve_reviewSummary(self, info):
+        """Return review_summary with camelCase"""
+        try:
+            return getattr(self, 'review_summary', None)
+        except Exception:
+            return None
+    
+    def resolve_pricing(self, info):
+        """Return pricing information"""
+        try:
+            return getattr(self, 'pricing', None)
+        except Exception:
+            return None
 
 
 class ProfessionalPricingType(DjangoObjectType):

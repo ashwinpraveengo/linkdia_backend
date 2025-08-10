@@ -446,13 +446,21 @@ class ConsultationSlot(models.Model):
         ('HELD', 'Temporarily Held'),
     ]
     
+    CONSULTATION_TYPE_CHOICES = [
+        ('ONLINE', 'Online'),
+        ('OFFLINE', 'Offline'),
+    ]
+    
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     professional = models.ForeignKey(ProfessionalProfile, on_delete=models.CASCADE, related_name='consultation_slots')
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
     status = models.CharField(max_length=20, choices=SLOT_STATUS_CHOICES, default='AVAILABLE')
     
-
+    # Consultation type and fee - calculated when slot is created
+    consultation_type = models.CharField(max_length=10, choices=CONSULTATION_TYPE_CHOICES, default='ONLINE')
+    consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    
     held_until = models.DateTimeField(null=True, blank=True)
     held_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='held_slots')
     
@@ -468,6 +476,41 @@ class ConsultationSlot(models.Model):
 
     def __str__(self):
         return f"{self.professional.user.full_name} - {self.start_time} to {self.end_time} ({self.status})"
+
+    def calculate_slot_fee(self):
+        """Calculate consultation fee based on slot duration and consultation type"""
+        # Get the duration from the slot time difference
+        slot_duration = self.end_time - self.start_time
+        duration_minutes = int(slot_duration.total_seconds() / 60)
+        
+        # Use custom rate if set
+        if self.custom_rate:
+            base_fee = self.custom_rate
+        else:
+            # Get professional's pricing
+            try:
+                pricing = self.professional.pricing
+                base_fee = pricing.get_fee_for_duration(duration_minutes)
+            except ProfessionalPricing.DoesNotExist:
+                # Fallback to default pricing if no pricing set
+                default_rates = {30: 500, 60: 1000, 90: 1400, 120: 1800}
+                base_fee = default_rates.get(duration_minutes, 1000)  # Default to 60min rate
+        
+        # Add extra charge for offline consultation
+        if self.consultation_type == 'OFFLINE':
+            try:
+                pricing = self.professional.pricing
+                base_fee += pricing.offline_consultation_extra
+            except ProfessionalPricing.DoesNotExist:
+                base_fee += 200  # Default offline extra
+                
+        return base_fee
+    
+    def save(self, *args, **kwargs):
+        """Override save to automatically calculate consultation fee"""
+        if not self.consultation_fee or self.consultation_fee == 0:
+            self.consultation_fee = self.calculate_slot_fee()
+        super().save(*args, **kwargs)
 
     def is_available(self):
         """Check if slot is available for booking"""
@@ -588,6 +631,16 @@ class ConsultationBooking(models.Model):
         """Check if booking can be cancelled by professional"""
         return self.booking_status in ['PENDING', 'CONFIRMED']
     
+    def save(self, *args, **kwargs):
+        """Override save to use consultation fee from the slot"""
+        if not self.consultation_fee:
+            # Use the fixed fee from the consultation slot
+            self.consultation_fee = self.consultation_slot.consultation_fee
+            # Set consultation type from slot if not already set
+            if not self.consultation_type:
+                self.consultation_type = self.consultation_slot.consultation_type
+        super().save(*args, **kwargs)
+
     def cancel_booking(self, cancelled_by_user, reason=""):
         """Cancel the booking"""
         from django.utils import timezone
