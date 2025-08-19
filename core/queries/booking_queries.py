@@ -1,15 +1,19 @@
 import graphene
 from graphene_django import DjangoObjectType
 from django.db.models import Q, Avg
+from datetime import datetime, timedelta, timezone as dt_timezone
 from django.utils import timezone
-from datetime import datetime, timedelta
 from core.models import (
     ConsultationBooking, ConsultationSlot, ProfessionalReview, 
-    ProfessionalReviewSummary, ProfessionalProfile, CustomUser
+    ProfessionalReviewSummary, ProfessionalProfile, CustomUser,
+    ConsultationAvailability   
 )
+
 from core.utils.permissions import login_required
 from core.types.common import PaginatedResult
 from core.types.proffesional_profile import ProfessionalProfileType, ProfessionalReviewSummaryType
+from datetime import time
+from core.utils.helpers import generate_slot_id
 
 
 class ConsultationBookingType(DjangoObjectType):
@@ -28,19 +32,50 @@ class ConsultationBookingType(DjangoObjectType):
 
 
 class ConsultationSlotType(DjangoObjectType):
-    is_available = graphene.Boolean()
+    # Override the id field to properly handle UUID to string conversion
+    id = graphene.String()
     duration_minutes = graphene.Int()
+    is_available = graphene.Boolean()
     
     class Meta:
         model = ConsultationSlot
         fields = "__all__"
     
-    def resolve_is_available(self, info):
-        return self.is_available()
+    def resolve_id(self, info):
+        # Convert UUID to string for GraphQL, handle both UUID and string IDs
+        if hasattr(self, 'id'):
+            return str(self.id)
+        return None
     
     def resolve_duration_minutes(self, info):
         duration = self.end_time - self.start_time
         return int(duration.total_seconds() / 60)
+    
+    def resolve_is_available(self, info):
+        if hasattr(self, 'is_available') and callable(self.is_available):
+            return self.is_available()
+        # For mock slots, check if status is AVAILABLE
+        return getattr(self, 'status', 'AVAILABLE') == 'AVAILABLE'
+
+
+# Create a separate type for available time slots
+class AvailableSlotType(graphene.ObjectType):
+    id = graphene.String(required=True)
+    professional = graphene.Field(ProfessionalProfileType, required=True)
+    start_time = graphene.DateTime(required=True)
+    end_time = graphene.DateTime(required=True)
+    duration_minutes = graphene.Int(required=True)
+    consultation_type = graphene.String(required=True)
+    consultation_fee = graphene.Decimal(required=True)
+    status = graphene.String(required=True)
+    is_available = graphene.Boolean(required=True)
+    
+    def resolve_duration_minutes(self, info):
+        duration = self.end_time - self.start_time
+        return int(duration.total_seconds() / 60)
+    
+    def resolve_is_available(self, info):
+        return self.status == 'AVAILABLE'
 
 
 class ProfessionalReviewType(DjangoObjectType):
@@ -65,6 +100,10 @@ class PaginatedReviewsType(PaginatedResult):
 
 class PaginatedSlotsType(PaginatedResult):
     items = graphene.List(ConsultationSlotType)
+
+
+class PaginatedAvailableSlotsType(PaginatedResult):
+    items = graphene.List(AvailableSlotType)
 
 
 class PaginatedProfessionalsType(PaginatedResult):
@@ -97,8 +136,8 @@ class BookingQueries(graphene.ObjectType):
     
     # Slot Availability Queries
     available_slots = graphene.Field(
-        PaginatedSlotsType,
-        professional_id=graphene.UUID(required=True),
+        PaginatedAvailableSlotsType,
+        professional_id = graphene.ID(required=True),
         date_from=graphene.Date(),
         date_to=graphene.Date(),
         page=graphene.Int(default_value=1),
@@ -119,7 +158,7 @@ class BookingQueries(graphene.ObjectType):
     # Review Queries
     professional_reviews = graphene.Field(
         PaginatedReviewsType,
-        professional_id=graphene.UUID(required=True),
+        professional_id = graphene.ID(required=True),
         page=graphene.Int(default_value=1),
         page_size=graphene.Int(default_value=10),
         rating_filter=graphene.Int(),
@@ -141,7 +180,7 @@ class BookingQueries(graphene.ObjectType):
     
     professional_review_summary = graphene.Field(
         ProfessionalReviewSummaryType,
-        professional_id=graphene.UUID(required=True),
+        professional_id = graphene.ID(required=True),
         description="Get aggregated review statistics for a professional"
     )
     
@@ -235,34 +274,75 @@ class BookingQueries(graphene.ObjectType):
             professional = ProfessionalProfile.objects.get(id=professional_id)
         except ProfessionalProfile.DoesNotExist:
             raise Exception("Professional not found")
-        
-        # Check if professional is verified
+
         if professional.verification_status != 'VERIFIED':
             raise Exception("Only verified professionals are available for booking")
-        
-        slots = ConsultationSlot.objects.filter(
-            professional=professional,
-            status='AVAILABLE'
-        )
-        
-        # Date filtering
-        if date_from:
-            slots = slots.filter(start_time__date__gte=date_from)
-        if date_to:
-            slots = slots.filter(start_time__date__lte=date_to)
-        
-        # Only show future slots
-        slots = slots.filter(start_time__gt=timezone.now())
-        slots = slots.order_by('start_time')
-        
-        # Pagination
-        total = slots.count()
+
+        availabilities = ConsultationAvailability.objects.filter(professional=professional)
+
+        if not availabilities.exists():
+            return PaginatedAvailableSlotsType(items=[], total=0, page=page, page_size=page_size, total_pages=0)
+
+        current_date = date_from or timezone.now().date()
+        end_date = date_to or (current_date + timedelta(days=30))
+
+        slots = []
+        while current_date <= end_date:
+            weekday_name = current_date.strftime("%A")
+
+            for availability in availabilities:
+                if weekday_name in availability.get_available_days():
+                    start_dt = datetime.combine(current_date, availability.from_time, tzinfo=dt_timezone.utc)
+                    end_dt = datetime.combine(current_date, availability.to_time, tzinfo=dt_timezone.utc)
+
+                    duration = timedelta(minutes=availability.consultation_duration_minutes)
+                    slot_start = start_dt
+                    while slot_start + duration <= end_dt:
+                        slot_end = slot_start + duration
+                        if slot_start > timezone.now():
+                            slot_id = generate_slot_id(professional.id, slot_start, slot_end)
+                            
+                            # Calculate consultation fee
+                            consultation_fee = 0.00
+                            try:
+                                pricing = professional.pricing
+                                consultation_fee = pricing.get_fee_for_duration(availability.consultation_duration_minutes)
+                                if availability.consultation_type == 'OFFLINE':
+                                    consultation_fee += pricing.offline_consultation_extra
+                            except:
+                                # Default pricing if no pricing set
+                                default_rates = {30: 500, 60: 1000, 90: 1400, 120: 1800}
+                                consultation_fee = default_rates.get(availability.consultation_duration_minutes, 1000)
+                                if availability.consultation_type == 'OFFLINE':
+                                    consultation_fee += 200
+                            
+                            # Create available slot object
+                            available_slot = AvailableSlotType(
+                                id=slot_id,
+                                professional=professional,
+                                start_time=slot_start,
+                                end_time=slot_end,
+                                duration_minutes=availability.consultation_duration_minutes,
+                                consultation_type=availability.consultation_type,
+                                consultation_fee=consultation_fee,
+                                status="AVAILABLE",
+                                is_available=True
+                            )
+                            
+                            slots.append(available_slot)
+                        slot_start = slot_end
+
+            current_date += timedelta(days=1)
+
+        slots = sorted(slots, key=lambda s: s.start_time)
+
+        total = len(slots)
         start = (page - 1) * page_size
         end = start + page_size
-        slots = slots[start:end]
-        
-        return PaginatedSlotsType(
-            items=slots,
+        paged_slots = slots[start:end]
+
+        return PaginatedAvailableSlotsType(
+            items=paged_slots,
             total=total,
             page=page,
             page_size=page_size,
@@ -359,7 +439,7 @@ class BookingQueries(graphene.ObjectType):
         try:
             review = ProfessionalReview.objects.get(id=review_id)
             return review
-        except ConsultationReview.DoesNotExist:
+        except ProfessionalReview.DoesNotExist:  # Fixed: was ConsultationReview
             raise Exception("Review not found")
 
     def resolve_professional_review_summary(self, info, professional_id):

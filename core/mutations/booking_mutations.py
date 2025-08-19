@@ -5,7 +5,8 @@ from django.db import transaction
 from datetime import datetime, timedelta
 from core.models import (
     ConsultationBooking, ConsultationSlot, ProfessionalReview, 
-    ProfessionalReviewSummary, ProfessionalProfile, CustomUser
+    ProfessionalReviewSummary, ProfessionalProfile, CustomUser,
+    ConsultationAvailability
 )
 from core.utils.permissions import login_required
 from core.queries.booking_queries import (
@@ -15,9 +16,9 @@ from core.queries.booking_queries import (
 
 
 class CreateBookingInput(graphene.InputObjectType):
-    professional_id = graphene.UUID(required=True)
-    slot_id = graphene.UUID(required=True)
-    booking_date = graphene.Date(required=True)  # Specific date for the booking
+    professional_id = graphene.ID(required=True)
+    slot_id = graphene.ID(required=True)
+    booking_date = graphene.Date(required=True) 
     consultation_type = graphene.String(required=True)  
     problem_description = graphene.String()
     contact_preference = graphene.String()
@@ -29,7 +30,7 @@ class CancelBookingInput(graphene.InputObjectType):
 
 
 class CreateReviewInput(graphene.InputObjectType):
-    professional_id = graphene.UUID(required=True)
+    professional_id = graphene.ID(required=True)
     rating = graphene.Int(required=True)
     review_note = graphene.String()
 
@@ -51,95 +52,111 @@ class CreateBookingMutation(graphene.Mutation):
     @login_required
     def mutate(self, info, input):
         user = info.context.user
-        
+
         if not user.is_client:
             return CreateBookingMutation(
                 success=False,
                 message="Only clients can create bookings"
             )
-        
+
         try:
             with transaction.atomic():
-                # Get professional and slot
+                # 1. Get professional
                 try:
                     professional = ProfessionalProfile.objects.get(id=input.professional_id)
-                    slot = ConsultationSlot.objects.select_for_update().get(
-                        id=input.slot_id,
-                        professional=professional
-                    )
-                except (ProfessionalProfile.DoesNotExist, ConsultationSlot.DoesNotExist):
+                except ProfessionalProfile.DoesNotExist:
                     return CreateBookingMutation(
                         success=False,
-                        message="Professional or slot not found"
+                        message="Professional not found"
                     )
-                
-                # Validate booking date is not in the past
-                from datetime import date
-                if input.booking_date < date.today():
+
+                # 2. Get availability for that professional & date
+                availability = ConsultationAvailability.objects.filter(
+                    professional=professional,
+                    day_of_week=input.booking_date.weekday()
+                ).first()
+
+                if not availability:
                     return CreateBookingMutation(
                         success=False,
-                        message="Cannot book slots for past dates"
+                        message="No availability found for this date"
                     )
-                
-                # Check if the slot's date matches the requested booking date
-                slot_date = slot.start_time.date()
-                if slot_date != input.booking_date:
-                    return CreateBookingMutation(
-                        success=False,
-                        message=f"This slot is for {slot_date}, but you requested {input.booking_date}"
-                    )
-                
-                # Validate that the booking date/time is in the future
+
+                # 3. Reconstruct all possible slots for that day
+                import datetime, hashlib
                 from django.utils import timezone as django_timezone
-                if slot.start_time <= django_timezone.now():
+
+                slot_start = datetime.datetime.combine(input.booking_date, availability.start_time)
+                slot_end = datetime.datetime.combine(input.booking_date, availability.end_time)
+
+                matching_slot = None
+                current_start = slot_start
+                while current_start + datetime.timedelta(minutes=availability.duration_minutes) <= slot_end:
+                    current_end = current_start + datetime.timedelta(minutes=availability.duration_minutes)
+
+                    slot_hash = hashlib.md5(
+                        f"{professional.id}_{current_start.isoformat()}_{current_end.isoformat()}".encode()
+                    ).hexdigest()
+
+                    if slot_hash == input.slot_id:
+                        matching_slot = (current_start, current_end)
+                        break
+
+                    current_start = current_end
+
+                if not matching_slot:
                     return CreateBookingMutation(
                         success=False,
-                        message="Cannot book slots in the past"
+                        message="Slot not found for the given date"
                     )
-                
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            # Check if professional is verified
+
+                start_time, end_time = matching_slot
+
+                # 4. Validate booking date
+                if start_time <= django_timezone.now():
+                    return CreateBookingMutation(
+                        success=False,
+                        message="Cannot book past slots"
+                    )
+
+                # 5. Check professional is verified
                 if professional.verification_status != 'VERIFIED':
                     return CreateBookingMutation(
                         success=False,
                         message="Only verified professionals can be booked"
                     )
-                
-                # Check if slot is available
-                if not slot.is_available():
+
+                # 6. Check if already booked
+                if ConsultationBooking.objects.filter(
+                    professional=professional,
+                    consultation_start=start_time,
+                    consultation_end=end_time,
+                    booking_status__in=['PENDING', 'CONFIRMED']
+                ).exists():
                     return CreateBookingMutation(
                         success=False,
-                        message="Selected time slot is not available"
+                        message="This slot is already booked"
                     )
-                
-                # Validate consultation type matches slot type
-                if input.consultation_type != slot.consultation_type:
-                    return CreateBookingMutation(
-                        success=False,
-                        message=f"This slot is only available for {slot.consultation_type.lower()} consultation"
-                    )
-                
-                # Create booking using the slot's pre-calculated fee
+
+                # 7. Create booking
                 booking = ConsultationBooking.objects.create(
                     client=user,
                     professional=professional,
-                    consultation_slot=slot,
                     consultation_type=input.consultation_type,
-                    consultation_fee=slot.consultation_fee,  # Use slot's pre-calculated fee
+                    consultation_fee=availability.consultation_fee,
                     client_problem_description=input.problem_description or "",
                     client_contact_preference=input.contact_preference or "",
-                    booking_status='PENDING'
+                    booking_status='PENDING',
+                    consultation_start=start_time,
+                    consultation_end=end_time
                 )
-                
-                # Mark slot as booked
-                slot.status = 'BOOKED'
-                slot.save()
-                
+
                 return CreateBookingMutation(
                     success=True,
                     message="Booking created successfully",
                     booking=booking
                 )
-                
+
         except Exception as e:
             return CreateBookingMutation(
                 success=False,

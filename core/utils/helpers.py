@@ -445,3 +445,12 @@ def mask_sensitive_data(data: str, mask_char: str = '*', visible_chars: int = 4)
     visible_part = data[-visible_chars:]
     
     return masked_part + visible_part
+
+import hashlib
+
+def generate_slot_id(professional_id, start_time, end_time):
+    """
+    Generate a stable unique slot ID using professional + start + end.
+    """
+    raw = f"{professional_id}-{start_time.isoformat()}-{end_time.isoformat()}"
+    return hashlib.md5(raw.encode()).hexdigest()
